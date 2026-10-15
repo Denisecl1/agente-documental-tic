@@ -101,3 +101,33 @@ OpenAI cobra por el uso de modelos, búsqueda y almacenamiento según su tarifar
 ## Entrega
 
 Repositorio GitHub con historia de commits, URL de Vercel si culminas el reto (o documentación del bloqueo), y conclusiones sobre OAuth, Google Drive API, RAG, File Search, FastAPI, OOP, Git/GitHub y seguridad.
+
+## Reto de despliegue en Vercel
+
+La aplicación Archivo TIC IA fue desarrollada y
+validada correctamente en localhost utilizando
+FastAPI, Google Drive API, OAuth 2.0 y OpenAI
+File Search.
+
+### Adaptaciones necesarias
+
+- FastAPI: preparar la ejecución en Vercel.
+- OAuth 2.0: implementar autenticación web segura.
+- Persistencia: almacenar tokens y manifiesto
+  documental en un servicio persistente.
+- Variables de entorno: proteger las credenciales
+  de Google y OpenAI.
+- Seguridad: implementar autenticación y
+  autorización para los endpoints públicos.
+
+### Validación local
+
+- Cinco documentos indexados correctamente.
+- Consultas documentales con RAG funcionales.
+- Fuentes verificables de Google Drive.
+- Sincronización incremental comprobada.
+- Cinco pruebas automáticas aprobadas con pytest.
+
+El despliegue público requiere completar las
+adaptaciones de autenticación, persistencia y
+seguridad antes de su publicación.
