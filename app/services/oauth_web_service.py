@@ -1,12 +1,14 @@
 
-"""Configuración de OAuth 2.0 web para Google Drive."""
+"""Configuración OAuth 2.0 web para Google Drive."""
 
 import os
+
 from google_auth_oauthlib.flow import Flow
 
 SCOPES = [
     "openid",
     "email",
+    "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
 
