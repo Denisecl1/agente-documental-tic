@@ -1,4 +1,5 @@
-"""Drive con OAuth local: un usuario, una carpeta, solo lectura."""
+"""Drive con OAuth local y web: soporte híbrido para localhost y Vercel."""
+import os
 from pathlib import Path
 from io import BytesIO
 from google.auth.transport.requests import Request
@@ -11,20 +12,34 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 ROOT = Path(__file__).resolve().parents[2]
 
 class DriveService:
-    def __init__(self):
-        token = ROOT / "token.json"
-        credentials_file = ROOT / "credentials.json"
+    def __init__(self, token_data: dict = None):
         creds = None
-        if token.exists():
-            creds = Credentials.from_authorized_user_file(str(token), SCOPES)
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        if not creds or not creds.valid:
-            if not credentials_file.exists():
-                raise RuntimeError("Falta credentials.json. Configura OAuth Desktop en Google Cloud.")
-            flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
-            creds = flow.run_local_server(port=0, open_browser=True)
-        token.write_text(creds.to_json(), encoding="utf-8")
+        
+        # 1. Modo Vercel (Web OAuth): El token se recibe en memoria, sin leer archivos.
+        if token_data:
+            creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        else:
+            # 2. Modo Local (Escritorio): Comportamiento original para localhost.
+            token = ROOT / "token.json"
+            credentials_file = ROOT / "credentials.json"
+            
+            if token.exists():
+                creds = Credentials.from_authorized_user_file(str(token), SCOPES)
+                
+            if not creds or not creds.valid:
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                else:
+                    if not credentials_file.exists():
+                        raise RuntimeError("Falta credentials.json. Configura OAuth Desktop en Google Cloud.")
+                    flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
+                    creds = flow.run_local_server(port=0, open_browser=True)
+                
+                # CRÍTICO: Evitar el error de "Read-only file system" en Vercel.
+                # Solo guardamos el token.json si NO estamos alojados en Vercel.
+                if not os.environ.get("VERCEL"):
+                    token.write_text(creds.to_json(), encoding="utf-8")
+                    
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
     def list_files(self, folder_id: str) -> list[dict]:
