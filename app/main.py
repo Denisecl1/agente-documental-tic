@@ -31,9 +31,9 @@ from app.services.oauth_token_store import (
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # CONFIGURACIÓN GENERAL
-# ---------------------------------------------------------
+# =========================================================
 
 load_dotenv()
 
@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 app = FastAPI(
     title="Archivo TIC IA",
-    version="1.1.0"
+    version="1.1.1"
 )
 
 app.mount(
@@ -59,9 +59,9 @@ STATE_TTL = 600
 SESSION_TTL = 8 * 60 * 60
 
 
-# ---------------------------------------------------------
+# =========================================================
 # FUNCIONES DE SEGURIDAD
-# ---------------------------------------------------------
+# =========================================================
 
 def is_vercel():
     """Detecta si la aplicación se ejecuta en Vercel."""
@@ -86,10 +86,8 @@ def allowed_email():
 
 def require_web_login(request: Request):
     """
-    Protege las API cuando se ejecutan en Vercel.
-
-    En localhost mantiene el funcionamiento
-    original de la práctica académica.
+    Protege los endpoints en Vercel.
+    Conserva el funcionamiento local de la práctica.
     """
 
     if not is_vercel():
@@ -119,12 +117,6 @@ def require_web_login(request: Request):
             ).decode("utf-8")
         )
 
-        if payload.get("email") != email:
-            raise HTTPException(
-                status_code=401,
-                detail="Sesión no autorizada"
-            )
-
     except (
         InvalidToken,
         ValueError,
@@ -136,14 +128,19 @@ def require_web_login(request: Request):
             detail="Sesión inválida o vencida"
         )
 
+    if payload.get("email") != email:
+        raise HTTPException(
+            status_code=401,
+            detail="Sesión no autorizada"
+        )
+
 
 def local_only(request: Request):
     """
     Permite la sincronización administrativa
-    únicamente desde localhost.
+    exclusivamente desde localhost.
     """
 
-    # Bloquear la sincronización en Vercel
     if is_vercel():
         raise HTTPException(
             status_code=403,
@@ -174,27 +171,24 @@ def local_only(request: Request):
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # INTERFAZ PRINCIPAL
-# ---------------------------------------------------------
+# =========================================================
 
 @app.get("/")
 def index():
-    """Muestra la interfaz web Archivo TIC IA."""
+    """Muestra la interfaz de Archivo TIC IA."""
 
     return FileResponse(ROOT / "index.html")
 
 
-# ---------------------------------------------------------
-# GOOGLE OAUTH WEB - INICIO DE SESIÓN
-# ---------------------------------------------------------
+# =========================================================
+# GOOGLE OAUTH - INICIO DE SESIÓN
+# =========================================================
 
 @app.get("/auth/google/login")
 def google_login():
-    """
-    Inicia el proceso de autorización OAuth
-    utilizando la cuenta de Google permitida.
-    """
+    """Inicia el proceso de autorización con Google."""
 
     if not is_vercel():
         raise HTTPException(
@@ -210,15 +204,15 @@ def google_login():
         # Estado aleatorio para prevenir CSRF
         state = secrets.token_urlsafe(32)
 
+        # En el inicio se solicitan los permisos de Google
         flow = create_web_flow(state=state)
 
-        # Generar la URL de autorización de Google
         authorization_url, _ = flow.authorization_url(
             access_type="offline",
             prompt="consent"
         )
 
-        # Conservar el estado y verificador PKCE
+        # Conservar estado y PKCE entre solicitudes
         payload = {
             "state": state,
             "code_verifier": flow.code_verifier
@@ -228,18 +222,23 @@ def google_login():
             json.dumps(payload).encode("utf-8")
         ).decode("ascii")
 
-    except (RuntimeError, ValueError):
+    except (RuntimeError, ValueError) as exc:
+        logger.error(
+            "Error al preparar OAuth: %s",
+            type(exc).__name__
+        )
+
         raise HTTPException(
             status_code=503,
             detail="Configuración OAuth web incompleta"
-        )
+        ) from exc
 
     response = RedirectResponse(
         url=authorization_url,
         status_code=302
     )
 
-    # Cookie temporal y protegida
+    # Cookie temporal, cifrada y protegida
     response.set_cookie(
         key=STATE_COOKIE,
         value=encrypted,
@@ -253,15 +252,15 @@ def google_login():
     return response
 
 
-# ---------------------------------------------------------
-# GOOGLE OAUTH WEB - CALLBACK
-# ---------------------------------------------------------
+# =========================================================
+# GOOGLE OAUTH - CALLBACK
+# =========================================================
 
 @app.get("/auth/google/callback")
 def google_callback(request: Request):
     """
-    Recibe el código de Google, valida la identidad
-    y almacena las credenciales cifradas en Neon.
+    Valida la respuesta de Google y almacena
+    las credenciales cifradas en Neon PostgreSQL.
     """
 
     if not is_vercel():
@@ -270,7 +269,7 @@ def google_callback(request: Request):
             detail="Callback web no disponible en localhost"
         )
 
-    # Comprobar si Google rechazó la autorización
+    # Revisar si Google rechazó la autorización
     if request.query_params.get("error"):
         raise HTTPException(
             status_code=400,
@@ -287,7 +286,7 @@ def google_callback(request: Request):
         )
 
     # -----------------------------------------------------
-    # VALIDAR ESTADO OAUTH Y RECUPERAR PKCE
+    # 1. VALIDAR STATE Y RECUPERAR PKCE
     # -----------------------------------------------------
 
     try:
@@ -305,7 +304,14 @@ def google_callback(request: Request):
             received_state,
             expected_state
         ):
-            raise ValueError("Estado OAuth incorrecto")
+            raise ValueError(
+                "El estado OAuth no coincide"
+            )
+
+        if not isinstance(code_verifier, str):
+            raise ValueError(
+                "Verificador PKCE inválido"
+            )
 
     except (
         InvalidToken,
@@ -320,16 +326,18 @@ def google_callback(request: Request):
         )
 
     # -----------------------------------------------------
-    # INTERCAMBIAR CÓDIGO Y VALIDAR IDENTIDAD
+    # 2. INTERCAMBIAR CÓDIGO DE GOOGLE
     # -----------------------------------------------------
 
     try:
+        # En el callback no solicitamos nuevos permisos.
+        # Comprobaremos manualmente los recibidos.
         flow = create_web_flow(
             state=expected_state,
-            code_verifier=code_verifier
+            code_verifier=code_verifier,
+            scopes=None
         )
 
-        # Obtener directamente el código enviado por Google
         authorization_code = request.query_params.get("code")
 
         if not authorization_code:
@@ -337,16 +345,61 @@ def google_callback(request: Request):
                 "Google no devolvió un código de autorización"
             )
 
-        # Intercambiar el código por credenciales OAuth
-        flow.fetch_token(code=authorization_code)
+        # IMPORTANTE: intercambiar el código una sola vez
+        token = flow.fetch_token(
+            code=authorization_code
+        )
+
+        # -------------------------------------------------
+        # 3. COMPROBAR LOS PERMISOS CONCEDIDOS
+        # -------------------------------------------------
+
+        scope_value = token.get("scope")
+
+        if not isinstance(scope_value, str):
+            raise ValueError(
+                "Google no informó los permisos concedidos"
+            )
+
+        granted = set(scope_value.split())
+
+        required = {
+            "openid",
+            "https://www.googleapis.com/auth/drive.readonly",
+        }
+
+        email_scopes = {
+            "email",
+            "https://www.googleapis.com/auth/userinfo.email",
+        }
+
+        allowed = required | email_scopes
+
+        valid_scopes = (
+            required.issubset(granted)
+            and bool(granted.intersection(email_scopes))
+            and granted.issubset(allowed)
+        )
+
+        if not valid_scopes:
+            raise ValueError(
+                "Google concedió permisos diferentes a los esperados"
+            )
+
+        # -------------------------------------------------
+        # 4. RECUPERAR CREDENCIALES
+        # -------------------------------------------------
 
         credentials = flow.credentials
 
-        # Verificar el token de identidad de Google
         if not credentials.id_token:
             raise ValueError(
                 "Google no devolvió un token de identidad"
             )
+
+        # -------------------------------------------------
+        # 5. VALIDAR IDENTIDAD CON GOOGLE
+        # -------------------------------------------------
 
         claims = id_token.verify_oauth2_token(
             credentials.id_token,
@@ -355,8 +408,8 @@ def google_callback(request: Request):
         )
 
     except Exception as exc:
-        # Registrar solamente el tipo de error,
-        # sin publicar tokens ni códigos de Google
+        # Registrar solo el tipo de error.
+        # No imprimir tokens ni códigos OAuth.
         logger.error(
             "Error al validar OAuth: %s",
             type(exc).__name__
@@ -365,10 +418,10 @@ def google_callback(request: Request):
         raise HTTPException(
             status_code=400,
             detail="No fue posible validar la autorización de Google"
-        )
+        ) from exc
 
     # -----------------------------------------------------
-    # VERIFICAR QUE LA CUENTA ESTÉ AUTORIZADA
+    # 6. VERIFICAR LA CUENTA AUTORIZADA
     # -----------------------------------------------------
 
     email = str(
@@ -384,13 +437,12 @@ def google_callback(request: Request):
         )
 
     # -----------------------------------------------------
-    # GUARDAR CREDENCIALES CIFRADAS EN NEON
+    # 7. GUARDAR CREDENCIALES CIFRADAS EN NEON
     # -----------------------------------------------------
 
     try:
         save_google_credentials(credentials)
 
-        # Crear una sesión cifrada del usuario autorizado
         session_data = json.dumps(
             {"email": email}
         ).encode("utf-8")
@@ -408,10 +460,10 @@ def google_callback(request: Request):
         raise HTTPException(
             status_code=503,
             detail="No se pudo guardar la autorización en Neon"
-        )
+        ) from exc
 
     # -----------------------------------------------------
-    # CREAR SESIÓN Y REGRESAR A LA APLICACIÓN
+    # 8. CREAR SESIÓN Y REDIRIGIR A LA APLICACIÓN
     # -----------------------------------------------------
 
     response = RedirectResponse(
@@ -419,7 +471,7 @@ def google_callback(request: Request):
         status_code=303
     )
 
-    # Eliminar el estado OAuth temporal
+    # Eliminar cookie temporal de OAuth
     response.delete_cookie(
         key=STATE_COOKIE,
         path="/",
@@ -428,7 +480,7 @@ def google_callback(request: Request):
         samesite="lax"
     )
 
-    # Crear cookie de sesión protegida
+    # Guardar cookie de sesión protegida
     response.set_cookie(
         key=SESSION_COOKIE,
         value=session_value,
@@ -442,13 +494,13 @@ def google_callback(request: Request):
     return response
 
 
-# ---------------------------------------------------------
-# GOOGLE OAUTH WEB - CERRAR SESIÓN
-# ---------------------------------------------------------
+# =========================================================
+# GOOGLE OAUTH - CERRAR SESIÓN
+# =========================================================
 
 @app.get("/auth/google/logout")
 def google_logout():
-    """Cierra la sesión web del navegador."""
+    """Cierra la sesión del navegador."""
 
     response = RedirectResponse(
         url="/",
@@ -466,9 +518,9 @@ def google_logout():
     return response
 
 
-# ---------------------------------------------------------
+# =========================================================
 # API - ESTADO DE LA APLICACIÓN
-# ---------------------------------------------------------
+# =========================================================
 
 @app.get("/api/health")
 def health():
@@ -483,9 +535,9 @@ def health():
     }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # API - DOCUMENTOS INDEXADOS
-# ---------------------------------------------------------
+# =========================================================
 
 @app.get(
     "/api/documents",
@@ -510,9 +562,9 @@ def documents():
     }
 
 
-# ---------------------------------------------------------
+# =========================================================
 # API - CONSULTAR AL AGENTE CON IA
-# ---------------------------------------------------------
+# =========================================================
 
 @app.post(
     "/api/ask",
@@ -524,7 +576,9 @@ def ask(payload: AskRequest):
 
     try:
         if not settings.openai_api_key:
-            raise ValueError("Falta OPENAI_API_KEY")
+            raise ValueError(
+                "Falta OPENAI_API_KEY"
+            )
 
         return AgentService().ask(
             payload.question,
@@ -544,9 +598,9 @@ def ask(payload: AskRequest):
         )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # API - SINCRONIZACIÓN DE GOOGLE DRIVE
-# ---------------------------------------------------------
+# =========================================================
 
 @app.post(
     "/api/sync",
@@ -556,13 +610,15 @@ def sync():
     """
     Sincroniza documentos con Google Drive.
 
-    Por seguridad, esta operación administrativa
-    permanece disponible únicamente en localhost.
+    Esta función administrativa permanece
+    disponible únicamente en localhost.
     """
 
     try:
         if not settings.openai_api_key:
-            raise ValueError("Falta OPENAI_API_KEY")
+            raise ValueError(
+                "Falta OPENAI_API_KEY"
+            )
 
         return SyncService().sync()
 

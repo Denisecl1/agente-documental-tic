@@ -13,7 +13,7 @@ SCOPES = [
 ]
 
 
-def create_web_flow(state=None, code_verifier=None):
+def create_web_flow(state=None, code_verifier=None, scopes=SCOPES):
     """Prepara el flujo OAuth web con credenciales de entorno."""
 
     client_id = os.getenv("GOOGLE_WEB_CLIENT_ID")
@@ -42,7 +42,7 @@ def create_web_flow(state=None, code_verifier=None):
 
     return Flow.from_client_config(
         client_config,
-        scopes=SCOPES,
+        scopes=scopes,
         state=state,
         redirect_uri=redirect_uri,
         code_verifier=code_verifier,
