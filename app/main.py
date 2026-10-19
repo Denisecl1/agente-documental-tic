@@ -1,4 +1,4 @@
-"""Aplicación académica LOCAL. No desplegar públicamente sin autenticación de usuarios."""
+"""Aplicación académica Archivo TIC IA con soporte Local y Serverless (Vercel)."""
 from pathlib import Path
 from ipaddress import ip_address
 from fastapi import FastAPI, HTTPException, Request, Depends
@@ -14,12 +14,13 @@ app = FastAPI(title="Archivo TIC IA", version="1.0.0")
 app.mount("/assets", StaticFiles(directory=ROOT / "assets"), name="assets")
 
 def local_only(request: Request):
-    """Defensa básica para el laboratorio; no equivale a autenticación pública."""
+    """Defensa para laboratorio local y validación de entorno en Vercel."""
     host = request.client.host if request.client else ""
-    try:
-        if not ip_address(host).is_loopback: raise ValueError()
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Sincronización disponible solo desde localhost")
+    if not settings.is_vercel:
+        try:
+            if not ip_address(host).is_loopback: raise ValueError()
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Sincronización disponible solo desde localhost")
     key = settings.local_admin_key
     if key and request.headers.get("X-Admin-Key") != key:
         raise HTTPException(status_code=401, detail="Clave administrativa incorrecta")

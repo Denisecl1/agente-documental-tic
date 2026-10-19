@@ -1,4 +1,6 @@
-"""Drive con OAuth local: un usuario, una carpeta, solo lectura."""
+"""Drive con OAuth local y soporte de token seguro en entorno Serverless (Vercel)."""
+import json
+import os
 from pathlib import Path
 from io import BytesIO
 from google.auth.transport.requests import Request
@@ -15,16 +17,30 @@ class DriveService:
         token = ROOT / "token.json"
         credentials_file = ROOT / "credentials.json"
         creds = None
-        if token.exists():
+        env_token = os.getenv("GOOGLE_TOKEN_JSON", "").strip()
+
+        if env_token:
+            creds = Credentials.from_authorized_user_info(json.loads(env_token), SCOPES)
+        elif token.exists():
             creds = Credentials.from_authorized_user_file(str(token), SCOPES)
+
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+
         if not creds or not creds.valid:
+            if os.getenv("VERCEL"):
+                raise RuntimeError("Falta configurar GOOGLE_TOKEN_JSON en las variables de entorno de Vercel.")
             if not credentials_file.exists():
                 raise RuntimeError("Falta credentials.json. Configura OAuth Desktop en Google Cloud.")
             flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)
-        token.write_text(creds.to_json(), encoding="utf-8")
+
+        if not os.getenv("VERCEL"):
+            try:
+                token.write_text(creds.to_json(), encoding="utf-8")
+            except OSError:
+                pass
+
         self.service = build("drive", "v3", credentials=creds, cache_discovery=False)
 
     def list_files(self, folder_id: str) -> list[dict]:

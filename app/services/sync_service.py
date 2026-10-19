@@ -1,5 +1,5 @@
 """Sincronización unidireccional: Drive -> OpenAI Vector Store.
-Nota: eliminar archivos de un vector store puede tener consistencia eventual.
+Soporta persistencia local en data/manifest.json y reconstrucción desde OpenAI en Vercel.
 """
 import json
 import os
@@ -10,7 +10,9 @@ from openai import OpenAI
 from app.core.config import settings
 from app.services.drive_service import DriveService
 
-MANIFEST = Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+LOCAL_MANIFEST = Path(__file__).resolve().parents[2] / "data" / "manifest.json"
+TMP_MANIFEST = Path(tempfile.gettempdir()) / "manifest.json"
+MANIFEST = TMP_MANIFEST if os.getenv("VERCEL") else LOCAL_MANIFEST
 _LOCK = threading.Lock()
 SUPPORTED = {"application/pdf", "text/plain", "application/vnd.google-apps.document"}
 
@@ -21,15 +23,42 @@ class SyncService:
 
     @staticmethod
     def load_manifest() -> dict:
-        if not MANIFEST.exists(): return {"vector_store_id": "", "documents": {}}
-        return json.loads(MANIFEST.read_text(encoding="utf-8"))
+        if MANIFEST.exists():
+            return json.loads(MANIFEST.read_text(encoding="utf-8"))
+        if LOCAL_MANIFEST.exists():
+            return json.loads(LOCAL_MANIFEST.read_text(encoding="utf-8"))
+        # En entorno serverless (Vercel), si el contenedor es nuevo, reconstruye desde OpenAI Vector Store
+        if os.getenv("VERCEL") and settings.openai_api_key and settings.vector_store_id:
+            try:
+                client = OpenAI(api_key=settings.openai_api_key)
+                vs_files = client.vector_stores.files.list(vector_store_id=settings.vector_store_id, limit=100)
+                docs = {}
+                for vf in vs_files.data:
+                    attrs = getattr(vf, "attributes", None) or {}
+                    drive_id = attrs.get("drive_id")
+                    if drive_id and attrs.get("name"):
+                        docs[drive_id] = {
+                            "name": attrs.get("name"),
+                            "modified_time": attrs.get("modified_time", ""),
+                            "mime_type": attrs.get("mime_type", "text/plain"),
+                            "openai_file_id": vf.id,
+                            "url": attrs.get("url", "https://drive.google.com/file/d/" + drive_id + "/view")
+                        }
+                data = {"vector_store_id": settings.vector_store_id, "documents": docs}
+                if docs:
+                    SyncService.save_manifest(data)
+                return data
+            except Exception:
+                pass
+        return {"vector_store_id": settings.vector_store_id or "", "documents": {}}
 
     @staticmethod
     def save_manifest(data: dict):
-        MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-        tmp = MANIFEST.with_suffix(".tmp")
+        target = TMP_MANIFEST if os.getenv("VERCEL") else MANIFEST
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, MANIFEST)
+        os.replace(tmp, target)
 
     def get_store(self, manifest):
         vector_id = settings.vector_store_id or manifest.get("vector_store_id")
@@ -67,15 +96,30 @@ class SyncService:
                     finally:
                         path.unlink(missing_ok=True)
                     if upload.status != "completed": raise RuntimeError("Indexación no completada: " + upload.status)
-                    # Solo se elimina la versión antigua después de indexar exitosamente la nueva.
                     if previous:
                         self.client.vector_stores.files.delete(vector_store_id=store, file_id=previous["openai_file_id"])
-                    docs[drive_id] = {
+                    doc_url = item.get("webViewLink") or (
+                        "https://docs.google.com/document/d/" + drive_id + "/edit" if item["mimeType"] == "application/vnd.google-apps.document" else "https://drive.google.com/file/d/" + drive_id + "/view")
+                    doc_entry = {
                         "name": item["name"], "modified_time": item.get("modifiedTime"),
                         "mime_type": item["mimeType"], "openai_file_id": upload.id,
-                        "url": item.get("webViewLink") or (
-                            "https://docs.google.com/document/d/" + drive_id + "/edit" if item["mimeType"] == "application/vnd.google-apps.document" else "https://drive.google.com/file/d/" + drive_id + "/view")
+                        "url": doc_url
                     }
+                    docs[drive_id] = doc_entry
+                    try:
+                        self.client.vector_stores.files.update(
+                            vector_store_id=store,
+                            file_id=upload.id,
+                            attributes={
+                                "drive_id": str(drive_id),
+                                "name": str(item["name"])[:250],
+                                "modified_time": str(item.get("modifiedTime", "")),
+                                "mime_type": str(item["mimeType"]),
+                                "url": str(doc_url)[:250]
+                            }
+                        )
+                    except Exception:
+                        pass
                     self.save_manifest(manifest)
                     stats["updated" if previous else "added"] += 1
                 except Exception as exc:
