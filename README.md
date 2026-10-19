@@ -1,6 +1,12 @@
 # 2.3 Agente documental con Google Drive — Archivo TIC IA
 
-Proyecto académico de **Inteligencia artificial aplicada a las TIC**, Tecnológico Nacional de México, campus Pachuca. Continuación de **2.2 Agente investigador**: se reemplaza la búsqueda pública Web Search por recuperación documental de **Google Drive**, **OpenAI Vector Stores** y **File Search (RAG)**.
+Proyecto académico de **Inteligencia artificial aplicada a las TIC**, Tecnológico Nacional de México, Instituto Tecnológico de Pachuca. Continuación de **2.2 Agente investigador**: se reemplaza la búsqueda pública Web Search por recuperación documental de **Google Drive**, **OpenAI Vector Stores** y **File Search (RAG)**.
+
+- **Autora:** Diana Denise Campos Lozano
+- **Carrera:** Ingeniería en Tecnologías de la Información y Comunicaciones
+- **Sitio desplegado en Vercel:** [https://agente-documental-tic-lime.vercel.app](https://agente-documental-tic-lime.vercel.app)
+
+---
 
 ## Propósito pedagógico
 
@@ -8,18 +14,19 @@ El alumno comprenderá que una organización necesita consultar documentos propi
 
 ## Arquitectura
 
-- `app/main.py`: FastAPI, endpoints REST, frontend estático y protección local de sincronización.
-- `app/core/config.py`: configuración y secretos cargados desde `.env`.
-- `app/models/documento.py`: modelos de solicitud y respuesta.
-- `app/services/drive_service.py`: OAuth Desktop, listado limitado a una carpeta y descarga/exportación de archivos.
-- `app/services/sync_service.py`: Vector Store, manifiesto de archivos, altas, cambios y bajas.
-- `app/services/agent_service.py`: Responses API + File Search y fuentes verificadas por anotaciones de archivo.
-- `index.html` y `assets/`: interfaz Bootstrap 5 y clases JavaScript.
+- `app/main.py`: FastAPI, endpoints REST, frontend estático y protección local/serverless de sincronización.
+- `app/core/config.py`: configuración y secretos cargados desde `.env` o variables de entorno del servidor.
+- `app/models/documento.py`: modelos de solicitud y respuesta (`AskRequest`, `Source`, `AskResponse`).
+- `app/services/drive_service.py`: OAuth Desktop en local y lectura de credenciales autorizadas por entorno en Serverless, listado limitado a una carpeta y descarga/exportación de archivos.
+- `app/services/sync_service.py`: Vector Store, manifiesto de archivos, persistencia de metadatos en atributos de OpenAI, altas, cambios y bajas.
+- `app/services/agent_service.py`: Responses API + File Search y fuentes verificadas por anotaciones de archivo (`file_citation`).
+- `index.html` y `assets/`: interfaz Bootstrap 5 personalizada y módulos JavaScript.
 - `data/manifest.json`: estado local del índice (no se publica).
+- `vercel.json`: configuración de enrutamiento y construcción serverless (`@vercel/python`).
 
 ## 1. Requisitos
 
-Python 3.11+, VS Code, Git, cuentas de Google Cloud y OpenAI API con créditos, navegador y documentos de prueba autorizados. **Las claves y los archivos de Drive no se incluyen en el ZIP.**
+Python 3.11+, VS Code, Git, cuentas de Google Cloud y OpenAI API con créditos, navegador y documentos de prueba autorizados. **Las claves y los archivos de Drive no se incluyen en el ZIP ni en el repositorio.**
 
 ## 2. Configuración Google Drive
 
@@ -32,7 +39,7 @@ Python 3.11+, VS Code, Git, cuentas de Google Cloud y OpenAI API con créditos, 
 ## 3. Preparar proyecto en Windows (PowerShell)
 
 ```powershell
-py -m venv .venv
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 Copy-Item .env.example .env
@@ -55,8 +62,8 @@ Abre <http://127.0.0.1:5000>. Usa **Sincronizar desde Drive** para autenticar Go
 | Método | Ruta | Función |
 |---|---|---|
 | GET | `/api/health` | Comprueba configuración y servidor. |
-| GET | `/api/documents` | Documentos ya indexados (manifiesto local). |
-| POST | `/api/sync` | Indexa cambios, requiere cliente desde loopback. |
+| GET | `/api/documents` | Documentos ya indexados (manifiesto local o reconstruido desde Vector Store). |
+| POST | `/api/sync` | Indexa cambios desde Google Drive hacia OpenAI Vector Store. |
 | POST | `/api/ask` | Pregunta con `question` y `use_search`. |
 
 Ejemplo JSON para Thunder Client:
@@ -65,7 +72,7 @@ Ejemplo JSON para Thunder Client:
 {"question": "¿Qué documentos tratan sobre AWS RDS?", "use_search": true}
 ```
 
-## 6. Experimentos
+## 6. Experimentos y Comparación de Resultados (Con vs. Sin File Search)
 
 1. Ejecuta una pregunta muy específica presente en los archivos **sin File Search**.
 2. Repite **con File Search**: inspecciona contenido y fuentes (anotaciones verificadas).
@@ -74,30 +81,51 @@ Ejemplo JSON para Thunder Client:
 5. Modifica un documento, vuelve a sincronizar y verifica que no se duplican registros en el manifiesto.
 6. Elimina un documento de prueba del Drive autorizado, sincroniza y comprueba que desaparece del manifiesto.
 
+| Criterio | Experimento A: Sin File Search (`use_search=false`) | Experimento B: Con File Search (`use_search=true` - RAG) |
+|---|---|---|
+| **Evidencia** | Nula respecto al repositorio privado; responde solo con conocimiento general preentrenado. | Alta; fundamenta la respuesta en los fragmentos recuperados del Vector Store indexado desde Google Drive. |
+| **Pertinencia** | Baja para consultas internas; desconoce el contenido específico de las prácticas de la carpeta. | Alta; responde directamente al contexto académico contenido en los documentos autorizados. |
+| **Precisión** | Da definiciones teóricas generales o declara no tener acceso a los archivos mencionados. | Precisa; extrae parámetros, motores, objetivos y diferencias exactas de los documentos indexados. |
+| **Referencias / Fuentes** | `sources: []` (0 fuentes mostradas, sin enlaces verificables). | Devuelve citas verificables (`file_citation`) con enlaces directos a los archivos originales en Google Drive. |
+
 **Limitaciones:** las búsquedas RAG pueden generar errores; comprueba siempre las respuestas contra las fuentes. La eliminación del índice tiene **consistencia eventual** y puede tardar en reflejarse. Los resultados sin citas explícitas no se presentan como fuentes. La actualización de un mismo archivo puede crear cargos transitorios mientras se reemplaza el anterior.
 
 ## 7. Pruebas automáticas
 
 ```powershell
-pytest -q
+python -m pytest -q
 ```
 
 Las pruebas son locales y no requieren claves reales ni consumen OpenAI.
 
-## 8. Git/GitHub y reto autónomo Vercel
+## 8. Git/GitHub y Documentación del Reto Autónomo en Vercel
 
 ```powershell
 git init
 git add .
-git commit -m "chore: estructura inicial del agente documental"
+git commit -m "chore: estructura inicial documental"
 ```
 
-Publica solamente el código; confirma `.gitignore`. **NO publiques este proyecto en Vercel sin adaptaciones de seguridad.** OAuth Desktop, `token.json`, `manifest.json`, la ausencia de sesiones de usuario y el endpoint de preguntas no son adecuados para Internet abierto. Para producción, investiga OAuth tipo **Web application**, redirecciones autorizadas, sesiones, almacenamiento persistente de tokens, control de acceso documental por usuario, protección del endpoint `/api/ask`, persistencia compartida del índice y cuotas. Los archivos locales de una función serverless pueden ser efímeros. Las variables de entorno deben configurarse en la plataforma, nunca en el frontend.
+Para lograr que la aplicación funcione de forma segura en el entorno serverless de **Vercel** sin alterar el funcionamiento local ni exponer credenciales en GitHub, se investigaron y resolvieron los siguientes retos técnicos:
+
+1. **Adaptación de FastAPI a Serverless (`vercel.json`):**
+   Se configuró `@vercel/python` en `vercel.json` redirigiendo las rutas hacia `app/main.py` para servir tanto los endpoints `/api/*` como los archivos estáticos (`/assets/*`) y la interfaz principal.
+2. **Migración de OAuth local a entorno Serverless (`GOOGLE_TOKEN_JSON`):**
+   En `localhost`, `InstalledAppFlow.run_local_server()` abre un navegador local y persiste `token.json` en disco. En Vercel no existe entorno gráfico ni almacenamiento persistente en disco para el flujo de escritorio. Se adaptó `DriveService` para que en entorno serverless reconstruya las credenciales OAuth en memoria a partir de la variable de entorno segura `GOOGLE_TOKEN_JSON` y ejecute `creds.refresh(Request())` automáticamente usando el `refresh_token`.
+3. **Solución al sistema de archivos efímero (`data/manifest.json` y OpenAI Vector Store Attributes):**
+   En Vercel, el sistema de archivos del proyecto es de solo lectura y el directorio temporal (`/tmp`) es efímero (se destruye cuando la instancia serverless se apaga). Para evitar que el inventario de documentos y los enlaces de las citas (`file_citation`) se pierdan entre ejecuciones:
+   - Durante la sincronización (`SyncService.sync`), los metadatos de cada documento (`name`, `modified_time`, `mime_type`, `url`) se almacenan directamente en los **`attributes` del archivo dentro del Vector Store de OpenAI**, además de guardarse en caché dentro de `/tmp/manifest.json`.
+   - Cuando una instancia serverless nueva atiende `/api/documents` o `/api/ask`, `SyncService.load_manifest()` reconstruye automáticamente el manifiesto consultando `vector_stores.files.list` en OpenAI.
+4. **Variables de entorno configuradas en el servidor de Vercel:**
+   `OPENAI_API_KEY`, `OPENAI_MODEL`, `GOOGLE_DRIVE_FOLDER_ID`, `VECTOR_STORE_ID` y `GOOGLE_TOKEN_JSON`. Ninguna clave ni token se expone en el frontend (`index.html` / `assets/js`) ni en el repositorio de GitHub.
 
 ## 9. Costos y privacidad
 
 OpenAI cobra por el uso de modelos, búsqueda y almacenamiento según su tarifario vigente. No subas a OpenAI documentos confidenciales, datos personales o material sin permiso del propietario. El material descargado se transmite a OpenAI para indexación. Revoca y rota cualquier credencial filtrada, incluso si ya fue borrada de GitHub.
 
-## Entrega
+## 10. Conclusiones Personales
 
-Repositorio GitHub con historia de commits, URL de Vercel si culminas el reto (o documentación del bloqueo), y conclusiones sobre OAuth, Google Drive API, RAG, File Search, FastAPI, OOP, Git/GitHub y seguridad.
+- **Agentes de IA y File Search (RAG):** Implementar RAG mediante OpenAI Vector Stores permite que un agente responda fundamentándose estrictamente en documentos privados autorizados de una organización, evitando depender únicamente de información pública de Internet y proporcionando trazabilidad real mediante citas verificables (`file_citation`).
+- **Programación Orientada a Objetos (OOP) y FastAPI:** La separación modular en servicios (`DriveService`, `SyncService`, `AgentService`) y modelos de validación Pydantic en FastAPI facilitó depurar cada etapa del flujo documental (autenticación OAuth, sincronización incremental y consulta semántica) de manera ordenada y comprobable con `pytest`.
+- **Git/GitHub, Variables de Entorno y Seguridad:** El control de versiones mediante ramas (`feature/agente-documental` y `main`) combinado con un archivo `.gitignore` estricto y variables de entorno asegura que credenciales críticas (`OPENAI_API_KEY`, `credentials.json`, `token.json`) nunca queden comprometidas en el código fuente público.
+- **Despliegue Serverless en Vercel:** Se comprendieron las diferencias arquitectónicas entre un servidor local persistente y una infraestructura serverless efímera, resolviendo la persistencia del índice mediante los atributos nativos del Vector Store y la gestión de credenciales desde el entorno del servidor.
